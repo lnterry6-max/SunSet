@@ -19,7 +19,11 @@
     RI:'Rhode Island',SC:'South Carolina',SD:'South Dakota',TN:'Tennessee',TX:'Texas',UT:'Utah',VT:'Vermont',
     VA:'Virginia',WA:'Washington',WV:'West Virginia',WI:'Wisconsin',WY:'Wyoming',DC:'District of Columbia'
   };
-  const MAX_SPOTS = 75;
+  const MAX_SPOTS = 85;
+  const SPOT_TTL = 7 * 24 * 60 * 60 * 1000;
+  const REFRESH_AFTER = 3 * 24 * 60 * 60 * 1000;
+  const GEO_TTL = 30 * 24 * 60 * 60 * 1000;
+  const SOLAR_TTL = 30 * 60 * 1000;
   const PER_PAGE = 8;
   const PHOTO = {
     water: 'https://images.unsplash.com/photo-1717518577846-b547438b7116?auto=format&fit=crop&w=480&q=75',
@@ -39,8 +43,9 @@
   const state = {
     mode: 'sunset', radius: 15, category: 'all', sort: 'best', savedOnly: false, limit: PER_PAGE,
     place: null, spots: [], request: null, map: null, markerLayer: null, radiusCircle: null, locationPin: null,
-    lastQuery: '', ratings: readStore('sunset-ratings', {}), favorites: readStore('sunset-favorites', []),
-    cache: new Map(), solar: null
+    lastQuery: '', placeIsGps: false, ratings: readStore('sunset-ratings', {}), favorites: readStore('sunset-favorites', []),
+    spotCache: readStore('sunset-spots-v2', {}), geoCache: readStore('sunset-geocodes-v2', {}),
+    solarCache: readStore('sunset-solar-v2', {}), solar: null
   };
 
   function readStore(key, fallback) { try { const value = JSON.parse(localStorage.getItem(key)); return value ?? fallback; } catch { return fallback; } }
@@ -95,25 +100,70 @@
     }
     return [...unique.values()].sort((a,b) => getViewScore(b,state.mode)-getViewScore(a,state.mode) || a.distance-b.distance).slice(0,MAX_SPOTS);
   }
-  function buildOverpassQuery(lat,lon,radius) {
+  // Use a few combined tag filters and a bounded response. The original query scanned
+  // the same large area eleven times and requested up to 500 complete records.
+  function buildOverpassQuery(lat, lon, radius) {
     const center = `around:${Math.round(radius*1609.344)},${lat.toFixed(5)},${lon.toFixed(5)}`;
     const criteria = [
-      '["tourism"="viewpoint"]', '["natural"="peak"]', '["natural"="cliff"]', '["natural"="saddle"]',
-      '["natural"="beach"]','["natural"="cape"]','["man_made"="pier"]','["leisure"="marina"]',
-      '["waterway"="dock"]','["leisure"="park"]','["leisure"="nature_reserve"]'
+      '["tourism"="viewpoint"]',
+      '["natural"~"^(peak|cliff|saddle|beach|cape)$"]',
+      '["man_made"="pier"]',
+      '["leisure"~"^(marina|park|nature_reserve)$"]',
+      '["waterway"="dock"]'
     ];
-    return `[out:json][timeout:28];(${criteria.map(filter => `nwr(${center})${filter}["name"];`).join('')});out center 500;`;
+    return `[out:json][timeout:12];(${criteria.map(filter => `nwr(${center})${filter}["name"];`).join('')});out center 220;`;
   }
-  async function requestJSON(url, options = {}) {
-    const response = await fetch(url, options);
-    if (!response.ok) throw new Error(`Service returned ${response.status}`);
-    return response.json();
+  async function requestJSON(url, {signal, timeoutMs = 8000, ...options} = {}) {
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    if (signal?.aborted) throw new DOMException('Search canceled', 'AbortError');
+    signal?.addEventListener('abort', abort, {once:true});
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut=true; controller.abort(); }, timeoutMs);
+    try {
+      const response = await fetch(url, {...options, signal:controller.signal});
+      if (!response.ok) throw new Error(response.status === 429 ? 'Map service is busy (rate-limited)' : `Service returned ${response.status}`);
+      return await response.json();
+    } catch (error) {
+      if (timedOut && !signal?.aborted) throw new Error('Request timed out');
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
+    }
+  }
+  function cacheWrite(bucket, key, payload, limit) {
+    state[bucket][key] = {at:Date.now(), value:payload};
+    const keys = Object.keys(state[bucket]).sort((a,b)=>state[bucket][b].at-state[bucket][a].at);
+    for (const oldKey of keys.slice(limit)) delete state[bucket][oldKey];
+    const storeKeys = {spotCache:'sunset-spots-v2',geoCache:'sunset-geocodes-v2',solarCache:'sunset-solar-v2'};
+    store(storeKeys[bucket],state[bucket]);
+  }
+  function cacheGet(bucket, key, lifetime) {
+    const entry = state[bucket][key];
+    return entry && Date.now() - entry.at < lifetime ? entry : null;
+  }
+  function locationKey(place) { return `${place.latitude.toFixed(3)},${place.longitude.toFixed(3)}`; }
+  function cachedSpots(place, radius) {
+    const center = locationKey(place);
+    const entries = Object.entries(state.spotCache).filter(([key, entry])=>{
+      const [where, range] = key.split(':');
+      return where === center && Number(range) >= radius && entry?.value && Date.now()-entry.at < SPOT_TTL;
+    }).sort((a,b)=>Number(a[0].split(':')[1])-Number(b[0].split(':')[1]));
+    if (!entries.length) return null;
+    const [key, entry] = entries[0];
+    const spots = entry.value.map(spot => ({...spot, distance:distanceMiles(place.latitude,place.longitude,spot.lat,spot.lon)}))
+      .filter(spot=>spot.distance <= radius+.03);
+    return {spots, at:entry.at, exact:key === `${center}:${radius}`};
   }
   async function geocode(query, signal) {
     const parts = query.split(',').map(v=>v.trim()).filter(Boolean), city = parts[0];
     if (!city) throw new Error('Enter a city or town to begin.');
-    const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=100&language=en&format=json`;
-    const json = await requestJSON(url, {signal});
+    const cacheKey = query.toLowerCase().replace(/\s+/g,' ').trim();
+    const saved = cacheGet('geoCache',cacheKey,GEO_TTL);
+    if (saved) return saved.value;
+    const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=40&language=en&format=json`;
+    const json = await requestJSON(url, {signal,timeoutMs:6500});
     if (!json.results?.length) throw new Error('We couldn’t find that city or town. Try adding its state or country.');
     const expectedRegion = (parts[1] || '').toLowerCase();
     const expandedRegion = (US_STATES[expectedRegion.toUpperCase()] || expectedRegion).toLowerCase();
@@ -130,32 +180,43 @@
       return {place,weight};
     }).sort((a,b)=>b.weight-a.weight);
     const best = candidates[0].place;
-    return {...best, displayName: [best.name,best.admin1,best.country].filter(Boolean).join(', ')};
+    const place = {...best, displayName:[best.name,best.admin1,best.country].filter(Boolean).join(', ')};
+    cacheWrite('geoCache',cacheKey,place,24);
+    return place;
   }
-  async function fetchSpots(place,radius,signal) {
-    const key = `${place.latitude.toFixed(3)},${place.longitude.toFixed(3)}:${radius}`;
-    if (state.cache.has(key)) return state.cache.get(key);
+  async function fetchSpots(place, radius, signal) {
     const query = buildOverpassQuery(place.latitude,place.longitude,radius);
-    let lastError;
     const endpoints = ['https://overpass.kumi.systems/api/interpreter','https://overpass-api.de/api/interpreter'];
+    let lastError;
     for (const endpoint of endpoints) {
       try {
-        const data = await requestJSON(endpoint, {method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:new URLSearchParams({data:query}),signal});
-        if (!Array.isArray(data.elements)) throw new Error('Unexpected place data');
+        const data = await requestJSON(endpoint, {
+          method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},
+          body:new URLSearchParams({data:query}),signal,timeoutMs:8500
+        });
+        if (!Array.isArray(data.elements)) throw new Error('Unexpected map response');
         const spots = parseSpots(data.elements,place,radius);
-        state.cache.set(key,spots);
-        return spots;
-      } catch (e) {
-        if (signal.aborted) throw e;
-        lastError=e;
+        // Persist compact data only, so repeat searches and smaller radius searches are immediate.
+        const compact = spots.map(s=>({...s,tags:{ele:s.tags.ele,description:s.tags.description,direction:s.tags.direction,
+          'viewpoint:direction':s.tags['viewpoint:direction']}}));
+        cacheWrite('spotCache',`${locationKey(place)}:${radius}`,compact,12);
+        return compact;
+      } catch (error) {
+        if (signal.aborted) throw error;
+        lastError=error;
       }
     }
-    throw new Error(`Scenic map data is unavailable right now. Please try again in a moment. (${lastError?.message || 'connection error'})`);
+    throw new Error(`Map data is taking too long right now. ${lastError?.message || 'Please try again shortly.'}`);
   }
-  async function fetchSolar(place,signal) {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${place.latitude}&longitude=${place.longitude}&daily=sunrise,sunset&timezone=auto&forecast_days=2`;
-    const data = await requestJSON(url,{signal});
-    return data.daily?.sunrise?.length ? {day:data.daily.time?.[0],sunrise:data.daily.sunrise[0],sunset:data.daily.sunset[0],timezone:data.timezone} : null;
+  async function fetchSolar(place, signal) {
+    const key = locationKey(place);
+    const saved = cacheGet('solarCache',key,SOLAR_TTL);
+    if (saved) return saved.value;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${place.latitude}&longitude=${place.longitude}&daily=sunrise,sunset&timezone=auto&forecast_days=1`;
+    const data = await requestJSON(url,{signal,timeoutMs:6000});
+    const solar = data.daily?.sunrise?.length ? {day:data.daily.time?.[0],sunrise:data.daily.sunrise[0],sunset:data.daily.sunset[0],timezone:data.timezone} : null;
+    if (solar) cacheWrite('solarCache',key,solar,24);
+    return solar;
   }
   function formatLocalTime(iso) {
     if (!iso?.includes('T')) return 'Time unavailable';
@@ -191,7 +252,7 @@
     const params = new URLSearchParams({api:'1',destination:`${spot.lat},${spot.lon}`});
     const dir = `https://www.google.com/maps/dir/?${params}`;
     return `<article class="spot-card" id="card-${escapeHTML(spot.id)}">
-      <div class="spot-photo" style="background-image:linear-gradient(0deg,rgba(28,32,45,.20),transparent 52%),url('${PHOTO[spot.category]}')" role="img" aria-label="Illustrative ${LABELS[spot.category].toLowerCase()} landscape, not a photo of this specific spot"><span class="photo-caption">Illustrative photo</span></div>
+      <div class="spot-photo"><img loading="lazy" decoding="async" src="${PHOTO[spot.category]}" alt="Illustrative ${LABELS[spot.category].toLowerCase()} landscape, not a photo of this specific spot"><span class="photo-caption">Illustrative photo</span></div>
       <div class="spot-body"><div class="spot-head"><div><div class="category-kicker">${escapeHTML(LABELS[spot.category])}</div><h3 class="spot-title">${escapeHTML(spot.name)}</h3></div><div class="spot-distance">${spot.distance < .1 ? '< 0.1' : spot.distance.toFixed(1)} mi</div></div>
       <p class="spot-description">${DESCRIPTIONS[spot.category]}</p>
       <div class="spot-bottom"><div class="spot-score"><span class="score-number"><span class="stars" aria-hidden="true">★</span> ${score.toFixed(1)} / 5</span><span class="score-label">Estimated view score</span></div>
@@ -243,39 +304,84 @@
     state.map.fitBounds(bounds,{padding:[20,20],maxZoom:12,animate:false});
     setTimeout(()=>state.map?.invalidateSize(),0);
   }
+  // The UI is never blocked by the slow scenic-data provider: show the town and
+  // daily solar times right away; show cached spots immediately when possible.
   async function search(locationOverride) {
     if (state.request) state.request.abort();
-    const controller=new AbortController();state.request=controller;
-    const signal=controller.signal, radius=Number(els.radius.value), rawLocation=els.location.value.trim();
-    if (!locationOverride && !rawLocation) { showStatus('error','A location is needed','Enter a city or town to find views.');return; }
-    state.radius=radius;state.limit=PER_PAGE;state.spots=[];state.solar=null;state.place=null;
-    els.list.innerHTML='';els.more.hidden=true;setSearching(true);
-    els.subtitle.textContent='Searching scenic spots in your chosen area…';
-    showStatus('loading','Looking for scenic places…','Checking mapped lookouts, waterfronts, mountain peaks, and parks.');
+    const controller = new AbortController();
+    state.request=controller;
+    const signal=controller.signal;
+    const radius=Number(els.radius.value);
+    const rawLocation=els.location.value.trim();
+    if (!locationOverride && !rawLocation) {
+      setSearching(false);
+      showStatus('error','A location is needed','Enter a city or town to find views.');
+      state.request=null;
+      return;
+    }
+    const usingGps = Boolean(locationOverride) || (state.placeIsGps && rawLocation.toLowerCase()==='current location');
+    const placeFromPrevious = usingGps ? locationOverride || state.place : (rawLocation.toLowerCase()===state.lastQuery ? state.place : null);
+    const previous = state.place;
+    state.radius=radius;
+    state.limit=PER_PAGE;
+    setSearching(true);
+    showStatus('loading','Finding your next golden hour…','Locating your town and nearby scenic spots.');
+    els.subtitle.textContent='Locating scenic places near you…';
     try {
-      const place=locationOverride || await geocode(rawLocation,signal);
-      if (signal.aborted) return;
-      state.place=place;
-      els.subtitle.textContent=`Scenic places around ${place.displayName || 'your current location'} — selected for your ${state.mode}.`;
-      // Fetch locations and solar events independently so a weather outage does not hide the map.
-      const [spots,solar] = await Promise.allSettled([fetchSpots(place,radius,signal),fetchSolar(place,signal)]);
-      if (signal.aborted) return;
-      state.solar=solar.status==='fulfilled'?solar.value:null;
+      const place = placeFromPrevious || await geocode(rawLocation, signal);
+      if(signal.aborted) return;
+      const centerChanged = !previous || distanceMiles(previous.latitude, previous.longitude, place.latitude, place.longitude) > .15;
+      state.place = place;
+      state.placeIsGps=usingGps;
+      state.lastQuery=usingGps?'current location':rawLocation.toLowerCase();
+      if(centerChanged) {state.spots=[];state.solar=null;}
+      els.subtitle.textContent=`Scenic spots around ${place.displayName || 'your current location'} — selected for ${state.mode}.`;
+      // Display the search radius/map without waiting for a third-party API.
+      if(centerChanged) render(); else updateMap(visibleSpots());
       updateSolar();
-      if (spots.status==='rejected') throw spots.reason;
-      state.spots=spots.value;
-      els.status.hidden=true;
-      if (!state.spots.length) showStatus('empty','No mapped viewpoints found','This area has no matching mapped scenic features within the chosen radius. Try increasing the radius or searching another town.');
-      render();
-    } catch(e) {
-      if (signal.aborted) return;
-      state.spots=[];
-      els.count.textContent='No places loaded';
-      showStatus('error','We couldn’t load your results',e?.message || 'Check your connection and try searching again.');
-      els.subtitle.textContent='Try again or choose another location.';
-      updateSolar();
+      fetchSolar(place,signal).then(solar=>{
+        if(signal.aborted) return;
+        state.solar=solar;
+        updateSolar();
+      }).catch(()=>{if(!signal.aborted) updateSolar();});
+
+      const cached=cachedSpots(place,radius);
+      if (cached) {
+        state.spots=cached.spots;
+        els.status.hidden=true;
+        render();
+        if(Date.now()-cached.at < REFRESH_AFTER) return;
+        showStatus('loading','Updating saved results…','Showing saved scenic spots while checking for recent map changes.');
+      } else {
+        state.spots=[];
+        showStatus('loading','Scanning the scenic map…','Sunrise/sunset time and the search area appear first. Finding viewpoints, shores, peaks and parks may take a few seconds.');
+        render();
+      }
+      try {
+        const fresh=await fetchSpots(place,radius,signal);
+        if(signal.aborted) return;
+        state.spots=fresh;
+        els.status.hidden=true;
+        if(!fresh.length) showStatus('empty','No mapped spots found','Try a larger radius, or search a nearby city. Not all good viewpoints are mapped yet.');
+        render();
+      } catch(error) {
+        if(signal.aborted) return;
+        if(cached) {
+          els.status.hidden=true;
+          els.subtitle.textContent=`Showing saved scenic spots around ${place.displayName || 'your location'} — live map updates unavailable.`;
+          render();
+        } else {
+          els.count.textContent='Could not load scenic spots';
+          showStatus('error','The scenic-data service is busy',`${error?.message || 'Please try again.'} You can retry or choose a smaller radius.`);
+        }
+      }
+    } catch(error) {
+      if(signal.aborted) return;
+      els.count.textContent='Could not find that location';
+      showStatus('error','Location search failed',error?.message || 'Check the city name and try again.');
+      els.subtitle.textContent='Try another city or use your current location.';
     } finally {
-      if (state.request===controller){state.request=null;setSearching(false);}
+      if(state.request===controller) {state.request=null;setSearching(false);}
     }
   }
   function setMode(mode) {
@@ -289,6 +395,7 @@
 
   els.form.addEventListener('submit',e=>{e.preventDefault();search();});
   els.radius.addEventListener('input',()=>{els.radiusValue.textContent=`${els.radius.value} ${els.radius.value==='1'?'mile':'miles'}`;});
+  els.radius.addEventListener('change',()=>{if(state.place) search(state.placeIsGps ? state.place : undefined);});
   document.querySelectorAll('[data-mode]').forEach(btn=>btn.addEventListener('click',()=>setMode(btn.dataset.mode)));
   els.categories.addEventListener('click',e=>{
     const btn=e.target.closest('[data-category]');if(!btn)return;
