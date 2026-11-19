@@ -48,3 +48,14 @@ Distances are **straight-line miles**, not travel distances; directions links us
 ## Potential next steps
 
 Verified viewpoint orientation and horizon obstructions; cloud forecast at the actual solar event; GPS navigation and saved itineraries; public spot submissions with moderated image reviews; town-by-town pages and social sharing.
+
+## Faster searching (v2)
+
+- Place search and sunrise/sunset times load independently of slower scenic-data requests; the map's search area appears as soon as a city is resolved.
+- Recent geocoding and solar lookups are cached in the browser (30 days and 30 minutes respectively).
+- Scenic results are cached for **7 days** in the browser; repeat searches and narrower radii can appear instantly. Results older than 3 days are refreshed in the background, while existing results remain visible.
+- The radius slider automatically updates the search after you release it.
+- Public Overpass responses are deliberately bounded and timeout/fallback behavior is explicit rather than allowing an indefinite spinner.
+- Result photos load lazily, with a smaller hero photo.
+
+The **first uncached search** may still take several seconds when public OpenStreetMap/Overpass servers are busy. For guaranteed fast results at scale, the next step is a hosted cache or a dedicated indexed scenic-place database. Cached locations may change in the real world; always confirm public access.
