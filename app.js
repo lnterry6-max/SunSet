@@ -4,7 +4,7 @@
 
   const $ = (selector) => document.querySelector(selector);
   const els = {
-    form: $('#search-form'), location: $('#location-input'), radius: $('#radius-input'), radiusValue: $('#radius-value'),
+    form: $('#search-form'), retry: $('#retry-spots'), location: $('#location-input'), radius: $('#radius-input'), radiusValue: $('#radius-value'),
     searchButton: $('#search-button'), nearby: $('#nearby-button'), status: $('#status'), list: $('#spot-list'),
     count: $('#results-count'), subtitle: $('#results-subtitle'), solarChip: $('#solar-chip'), solarText: $('#solar-time-text'),
     categories: $('#category-filters'), more: $('#show-more'), saved: $('#saved-filter'), sort: $('#sort-select'),
@@ -43,6 +43,19 @@
     parks: 'A public green space to slow down and enjoy the changing sky. Check park hours.'
   };
   const LABELS = {water:'Waterfront',mountains:'Mountain views',coast:'Coastal view',lookouts:'Scenic lookout',parks:'Park & nature'};
+  // Source-checked Worcester landmarks, shown as candidates only when live OSM
+  // results are delayed/unavailable. These are NOT verified sunset viewpoints.
+  // Sources: City of Worcester / Mass DCR and published geographic coordinates.
+  const STARTER_SPOTS = [
+    {id:'starter-bancroft-tower',type:'node',lat:42.276478,lon:-71.815912,name:'Salisbury Park · Bancroft Tower',category:'lookouts',source:'starter',notes:'Worcester scenic hilltop park. Park grounds: 8 AM–8 PM; tower access requires a permit. Sunrise access may be restricted.',tags:{description:'Public hillside park',opening_hours:'08:00-20:00'}},
+    {id:'starter-green-hill',type:'node',lat:42.2831488,lon:-71.774793,name:'Green Hill Park',category:'parks',source:'starter',notes:'City park with hills and green space. Check the exact viewing direction and posted park hours.',tags:{description:'City green space'}},
+    {id:'starter-regatta-point',type:'node',lat:42.2773155,lon:-71.7584038,name:'Regatta Point · Lake Quinsigamond',category:'water',source:'starter',notes:'State-park lakefront, subject to day-use park access hours and seasonal restrictions.',tags:{description:'Waterfront day-use park'}}
+  ];
+  function starterSpots(place,radius) {
+    if(distanceMiles(place.latitude,place.longitude,42.2626,-71.8023)>10)return [];
+    return STARTER_SPOTS.map(s=>({...s,distance:distanceMiles(place.latitude,place.longitude,s.lat,s.lon)}))
+      .filter(s=>s.distance<=radius+.03);
+  }
   const state = {
     mode: 'sunset', radius: 15, category: 'all', sort: 'nearest', savedOnly: false, mySpotsOnly:false, accessFilter:'all', travelFilter:'all', limit: PER_PAGE,
     place: null, spots: [], request: null, map: null, markerLayer: null, radiusCircle: null, locationPin: null,
@@ -98,7 +111,7 @@
       if (distance > radius + .03) continue;
       const cleanName = tags.name.trim();
       const dedupeKey = cleanName.toLowerCase().replace(/[^a-z0-9]/g,'');
-      const spot = {...coords, category, tags, name:cleanName, distance, source:'osm',
+      const spot = {...coords, category, tags, name:cleanName, distance, source:el.source||'osm',
         id:`${el.type}-${el.id}`, osmType:el.type,osmId:el.id};
       const old = unique.get(dedupeKey);
       if (!old || getViewScore(spot,state.mode) > getViewScore(old,state.mode) || (getViewScore(spot,state.mode)===getViewScore(old,state.mode) && spot.distance < old.distance)) unique.set(dedupeKey,spot);
@@ -190,30 +203,36 @@
     return place;
   }
   async function fetchSpots(place, radius, signal) {
-    const query = buildOverpassQuery(place.latitude,place.longitude,radius);
-    const endpoints = ['https://overpass.kumi.systems/api/interpreter','https://overpass-api.de/api/interpreter'];
-    let lastError;
-    for (const endpoint of endpoints) {
-      try {
-        const data = await requestJSON(endpoint, {
-          method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},
-          body:new URLSearchParams({data:query}),signal,timeoutMs:8500
-        });
-        if (!Array.isArray(data.elements)) throw new Error('Unexpected map response');
-        const spots = parseSpots(data.elements,place,radius);
-        // Persist compact data only, so repeat searches and smaller radius searches are immediate.
-        const compact = spots.map(s=>({...s,tags:{ele:s.tags.ele,description:s.tags.description,direction:s.tags.direction,
-          'viewpoint:direction':s.tags['viewpoint:direction'],
-          access:s.tags.access,foot:s.tags.foot,bicycle:s.tags.bicycle,motor_vehicle:s.tags.motor_vehicle,boat:s.tags.boat,
-          opening_hours:s.tags.opening_hours}}));
-        cacheWrite('spotCache',`${locationKey(place)}:${radius}`,compact,12);
-        return compact;
-      } catch (error) {
-        if (signal.aborted) throw error;
-        lastError=error;
-      }
+    const fetchRadius=Math.min(50,Math.ceil(radius/5)*5);
+    const lat=place.latitude.toFixed(3),lon=place.longitude.toFixed(3);
+    const endpoint=`/api/spots?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&radius=${fetchRadius}`;
+    let elements;
+    try {
+      const result=await requestJSON(endpoint,{signal,timeoutMs:10800});
+      if(!Array.isArray(result.elements))throw new Error('Invalid scenic-data response');
+      elements=result.elements;
+    } catch(error) {
+      if(signal.aborted)throw error;
+      // A direct request preserves service for static hosts (e.g. GitHub Pages)
+      // or temporary function outages. No repeated requests to blocked servers.
+      const query=buildOverpassQuery(place.latitude,place.longitude,Math.min(radius,20));
+      const direct=await requestJSON('https://overpass.private.coffee/api/interpreter',{
+        method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},
+        body:new URLSearchParams({data:query}),signal,timeoutMs:4800
+      });
+      if(!Array.isArray(direct.elements))throw new Error('Live scenic locations are unavailable');
+      elements=direct.elements;
     }
-    throw new Error(`Map data is taking too long right now. ${lastError?.message || 'Please try again shortly.'}`);
+    const fresh=parseSpots(elements,place,radius);
+    // Add the three source-checked Worcester candidates only if OSM has none.
+    // The UI never labels those backup places as community-rated or verified.
+    const result=fresh.length?fresh:starterSpots(place,radius);
+    const compact=result.map(spot=>({...spot,tags:{ele:spot.tags.ele,description:spot.tags.description,
+      direction:spot.tags.direction,'viewpoint:direction':spot.tags['viewpoint:direction'],
+      access:spot.tags.access,foot:spot.tags.foot,bicycle:spot.tags.bicycle,
+      motor_vehicle:spot.tags.motor_vehicle,boat:spot.tags.boat,opening_hours:spot.tags.opening_hours}}));
+    if(fresh.length)cacheWrite('spotCache',`${locationKey(place)}:${radius}`,compact,12);
+    return compact;
   }
   async function fetchSolar(place, signal) {
     const key = locationKey(place);
@@ -240,6 +259,7 @@
     els.status.hidden=false;els.status.dataset.type=type;
     els.status.querySelector('strong').textContent=title;
     els.status.querySelector('p').textContent=message;
+    if(els.retry) els.retry.hidden=!(type==='error'||type==='warning');
   }
   function setSearching(isSearching) {
     els.searchButton.disabled = isSearching;
@@ -319,7 +339,7 @@
     return `Checking today's ${state.mode} time for this exact location…`;
   }
   function cardHTML(spot) {
-    const personal=spot.source==='personal';
+    const personal=spot.source==='personal', starter=spot.source==='starter';
     const myRating=Number(state.ratings[spot.id]||0);
     const score=personal ? myRating : getViewScore(spot,state.mode);
     const access=accessFor(spot),methods=travelFor(spot);
@@ -331,10 +351,10 @@
       : `<span class="score-number"><span class="stars">★</span> ${score.toFixed(1)} / 5</span><span class="score-label">Estimated scenic potential</span>`;
     const eventText=personal ? ({both:'Sunrise & sunset',sunrise:'Best at sunrise',sunset:'Best at sunset',unknown:'Best time unverified'}[spot.bestFor]||'Best time unverified') : 'Sun direction not verified';
     const visitLabel=methods.length ? methods.map(m=>METHOD_TEXT[m]).join(' · ') : 'Travel access unverified';
-    const details = personal && spot.notes ? `<p class="spot-notes">${escapeHTML(spot.notes)}</p>` : '';
+    const details = (personal || starter) && spot.notes ? `<p class="spot-notes">${escapeHTML(spot.notes)}</p>` : '';
     return `<article class="spot-card" id="card-${escapeHTML(spot.id)}">
       <div class="spot-photo"><img loading="lazy" decoding="async" src="${PHOTO[spot.category]}" alt="Illustrative ${LABELS[spot.category].toLowerCase()} landscape, not a photo of this specific spot"><span class="photo-caption">Illustrative photo</span></div>
-      <div class="spot-body"><div class="spot-head"><div><div class="category-kicker">${escapeHTML(LABELS[spot.category])}${personal?' · MY SPOT':''}</div><h3 class="spot-title">${escapeHTML(spot.name)}</h3></div><div class="spot-distance">${spot.distance<.1?'&lt; 0.1':spot.distance.toFixed(1)} mi</div></div>
+      <div class="spot-body"><div class="spot-head"><div><div class="category-kicker">${escapeHTML(LABELS[spot.category])}${personal?' · MY SPOT':starter?' · VERIFIED PLACE, UNVERIFIED VIEW':''}</div><h3 class="spot-title">${escapeHTML(spot.name)}</h3></div><div class="spot-distance">${spot.distance<.1?'&lt; 0.1':spot.distance.toFixed(1)} mi</div></div>
       <div class="spot-visit"><span class="visit-pill access-${access}">${ACCESS_TEXT[access]}</span><span class="visit-pill">${escapeHTML(visitLabel)}</span><span class="visit-pill">${escapeHTML(eventText)}</span></div>
       ${details||`<p class="spot-description">${DESCRIPTIONS[spot.category]}</p>`}
       <div class="spot-solar" data-spot-solar="${escapeHTML(spot.id)}">${spotTime(spot)}</div>
@@ -484,8 +504,9 @@
         if(Date.now()-cached.at < REFRESH_AFTER) return;
         showStatus('loading','Updating saved results…','Showing saved scenic spots while checking for recent map changes.');
       } else {
-        state.spots=[];
-        showStatus('loading','Scanning the scenic map…','Sunrise/sunset time and the search area appear first. Finding viewpoints, shores, peaks and parks may take a few seconds.');
+        state.spots=starterSpots(place,radius);
+        showStatus('loading',state.spots.length?'Showing known local places…':'Scanning the scenic map…',
+          'Searching OpenStreetMap for more scenic places. Locations shown so far are candidates; confirm public access and sun direction.');
         render();
       }
       try {
@@ -502,8 +523,13 @@
           els.subtitle.textContent=`Showing saved scenic spots around ${place.displayName || 'your location'} — live map updates unavailable.`;
           render();
         } else {
-          els.count.textContent='Could not load scenic spots';
-          showStatus('error','The scenic-data service is busy',`${error?.message || 'Please try again.'} You can retry or choose a smaller radius.`);
+          state.spots=starterSpots(place,radius);
+          render();
+          if(state.spots.length || localSpotsForArea().length) {
+            showStatus('warning','Showing available places','Live scenic discovery is offline. These are saved personal or source-checked local candidates, not verified viewing recommendations. Try again for more results.');
+          } else {
+            showStatus('error','Live scenic search is unavailable','The public mapping service did not respond. You can still add a spot, or try again in a moment.');
+          }
         }
       }
     } catch(error) {
@@ -525,6 +551,7 @@
   }
 
   els.form.addEventListener('submit',e=>{e.preventDefault();search();});
+  els.retry?.addEventListener('click',()=>search(state.placeIsGps ? state.place : undefined));
   els.radius.addEventListener('input',()=>{els.radiusValue.textContent=`${els.radius.value} ${els.radius.value==='1'?'mile':'miles'}`;});
   els.radius.addEventListener('change',()=>{if(state.place) search(state.placeIsGps ? state.place : undefined);});
   document.querySelectorAll('[data-mode]').forEach(btn=>btn.addEventListener('click',()=>setMode(btn.dataset.mode)));
