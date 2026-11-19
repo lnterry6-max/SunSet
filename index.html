@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#141c30" />
+  <meta name="description" content="Discover beautiful places to watch the sunrise and sunset near any city. Filter by distance, scenery, and view score." />
+  <title>SunSet — Find your golden hour</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="./styles.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <header class="hero">
+    <div class="hero-image" role="img" aria-label="Warm pink and golden sunset light over dramatic coastal cliffs"></div>
+    <div class="hero-shade"></div>
+    <div class="hero-content page-width">
+      <nav class="topnav" aria-label="Main navigation">
+        <a class="brand" href="#top" aria-label="SunSet home">
+          <span class="brand-icon" aria-hidden="true"><span class="brand-sun"></span></span>
+          <span>SunSet<span class="brand-dot">.</span></span>
+        </a>
+        <div class="nav-links">
+          <a href="#discover">Explore spots</a>
+          <a href="#how-it-works">How it works</a>
+        </div>
+        <a class="nav-cta" href="#discover">Explore now <span aria-hidden="true">↗</span></a>
+      </nav>
+
+      <div class="hero-message" id="top">
+        <div class="eyebrow"><span class="eyebrow-line"></span> THE WORLD, IN GOLDEN HOUR</div>
+        <h1>Chase the light.<br /><em>Find your place.</em></h1>
+        <p>From quiet lakeshores to mountain peaks, discover the most beautiful places to watch the sky change—wherever you are.</p>
+      </div>
+
+      <form class="search-panel" id="search-form" aria-label="Find sunrise and sunset spots">
+        <div class="search-header">
+          <span class="search-header-label">YOUR NEXT GOLDEN HOUR STARTS HERE</span>
+          <div class="event-switch" role="group" aria-label="Choose solar event">
+            <button type="button" class="event-option" data-mode="sunrise" aria-pressed="false"><span aria-hidden="true">☀</span> Sunrise</button>
+            <button type="button" class="event-option active" data-mode="sunset" aria-pressed="true"><span aria-hidden="true">◐</span> Sunset</button>
+          </div>
+        </div>
+        <div class="search-row">
+          <label class="location-field" for="location-input">
+            <span class="field-kicker">LOCATION</span>
+            <span class="field-value">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 10c0 5-8 12-8 12S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/></svg>
+              <input id="location-input" name="location" type="search" placeholder="City, state or country" value="Worcester, MA" autocomplete="address-level2" required />
+            </span>
+          </label>
+          <div class="radius-field">
+            <div class="radius-label"><label for="radius-input" class="field-kicker">SEARCH RADIUS</label><strong id="radius-value">15 miles</strong></div>
+            <input id="radius-input" name="radius" type="range" min="1" max="50" value="15" step="1" aria-label="Search radius in miles" />
+            <div class="radius-limits"><span>1 mi</span><span>50 mi</span></div>
+          </div>
+          <button class="search-button" type="submit" id="search-button"><span class="search-button-icon">↗</span><span>Find my spots</span></button>
+        </div>
+        <div class="search-bottom"><button type="button" class="nearby-button" id="nearby-button"><span aria-hidden="true">⌾</span> Use my current location</button><span>Real places · Real distances · Golden hour times</span></div>
+      </form>
+      <div class="hero-footer"><span>YOUR FRONT-ROW SEAT TO THE SKY</span><span class="scroll-hint">SCROLL TO EXPLORE <span aria-hidden="true">↓</span></span></div>
+    </div>
+  </header>
+
+  <main>
+    <section class="discover-section page-width" id="discover" aria-labelledby="results-heading">
+      <div class="section-overline"><span class="small-sparkle" aria-hidden="true">✳</span> THE DISCOVERY GUIDE</div>
+      <div class="section-heading-row">
+        <div><h2 id="results-heading">Good views, <em>closer than you think.</em></h2><p id="results-subtitle">Search for a city to uncover scenic spots within reach.</p></div>
+        <div class="solar-chip" id="solar-chip" aria-live="polite"><span class="solar-icon">◐</span><span id="solar-time-text">Sunset times will appear here</span></div>
+      </div>
+
+      <div class="filters" aria-label="Filter scenic spots">
+        <div class="filter-chips" id="category-filters">
+          <button class="filter-chip active" data-category="all" aria-pressed="true">All views</button>
+          <button class="filter-chip" data-category="water" aria-pressed="false">≈ Waterfront</button>
+          <button class="filter-chip" data-category="mountains" aria-pressed="false">△ Mountains</button>
+          <button class="filter-chip" data-category="coast" aria-pressed="false">☼ Coast</button>
+          <button class="filter-chip" data-category="lookouts" aria-pressed="false">✧ Lookouts</button>
+          <button class="filter-chip" data-category="parks" aria-pressed="false">♧ Parks</button>
+        </div>
+        <div class="filter-controls">
+          <button class="saved-filter" id="saved-filter" aria-pressed="false"><span aria-hidden="true">♡</span> Saved</button>
+          <label class="sort-label" for="sort-select">Sort by <select id="sort-select" name="sort"><option value="best">Best views</option><option value="nearest">Nearest</option><option value="name">Name A–Z</option><option value="rating">My ratings</option></select></label>
+        </div>
+      </div>
+
+      <div class="results-layout">
+        <div class="results-column">
+          <div class="results-meta"><span id="results-count">Explore your nearby horizon</span><span class="rating-caption"><span aria-hidden="true">✦</span> Stars are scenic estimates, not community averages</span></div>
+          <div class="status" id="status" role="status" aria-live="polite"><span class="status-spinner" aria-hidden="true"></span><div><strong>Finding your golden hour…</strong><p>Looking up the city and nearby scenic places.</p></div></div>
+          <div class="spot-list" id="spot-list"></div>
+          <button type="button" class="show-more" id="show-more" hidden>See more places <span aria-hidden="true">↓</span></button>
+        </div>
+        <aside class="map-column" aria-label="Map of scenic places">
+          <div class="map-card">
+            <div class="map-head"><div><span class="map-head-eyebrow">EXPLORE THE AREA</span><h3>Your scenic map</h3></div><span class="live-dot"><span></span> LIVE MAP</span></div>
+            <div id="map" role="region" aria-label="Map showing scenic places near searched location"><div class="map-fallback">Your map will appear here when places load.</div></div>
+            <div class="map-bottom"><span><span class="orange-pin"></span> Scenic spots</span><span><span class="muted-pin"></span> Search area</span></div>
+          </div>
+          <div class="tip-card"><span class="tip-icon">✦</span><div><strong>A little golden-hour tip</strong><p>Arrive 20–30 minutes early. The colors before and after the sun crosses the horizon are often just as beautiful.</p></div></div>
+        </aside>
+      </div>
+      <p class="data-note" id="data-note">Places come from OpenStreetMap. Scenic scores estimate a place’s potential, not its exact horizon or safety. Always check access, operating hours, weather, and terrain before visiting.</p>
+    </section>
+
+    <section class="how-section" id="how-it-works">
+      <div class="page-width how-content"><div class="how-intro"><span class="section-overline">SUNRISE TO SUNSET, MADE SIMPLE</span><h2>The best moments<br />are <em>worth finding.</em></h2><p>A few thoughtful filters and real geographic data make the outdoors a little more accessible.</p></div><div class="steps"><div class="step"><span>01</span><div><h3>Pick your place</h3><p>Search a city or use your location, then choose how far you’re willing to travel.</p></div></div><div class="step"><span>02</span><div><h3>Find your kind of view</h3><p>Filter waterfronts, mountain peaks, scenic lookouts, coastlines, and parks.</p></div></div><div class="step"><span>03</span><div><h3>Go for the glow</h3><p>Compare scenic estimates, check the day’s solar time, save favorites, and get directions.</p></div></div></div></div>
+    </section>
+  </main>
+
+  <footer class="footer"><div class="page-width footer-inner"><a class="brand footer-brand" href="#top"><span class="brand-icon"><span class="brand-sun"></span></span><span>SunSet<span class="brand-dot">.</span></span></a><p>Made for people who never get tired of looking up.</p><div class="credits">Place data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap contributors</a> · Times by <a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Open-Meteo</a> · Photos: illustrative, via <a href="https://unsplash.com/" target="_blank" rel="noreferrer">Unsplash</a></div></div></footer>
+</body>
+</html>
