@@ -59,3 +59,30 @@ Verified viewpoint orientation and horizon obstructions; cloud forecast at the a
 - Result photos load lazily, with a smaller hero photo.
 
 The **first uncached search** may still take several seconds when public OpenStreetMap/Overpass servers are busy. For guaranteed fast results at scale, the next step is a hosted cache or a dedicated indexed scenic-place database. Cached locations may change in the real world; always confirm public access.
+
+## Version 3: Personal spot contributions (November 2026)
+
+SunSet now supports **locally saved personal spot submissions** in the existing responsive website:
+
+- **Add my spot** opens a form with the viewing point's name, scenery, sunrise/sunset suitability, latitude/longitude, access classification, optional travel methods, local tips, and the user's own star rating.
+- The **map pin picker** lets visitors select the actual viewing coordinates from the map. Enter *only the publicly accessible viewing point*; never submit private-property coordinates or imply landowner permission.
+- User spots appear alongside mapped places inside the search radius and are removable via **Delete**. They survive reloads through browser local storage; clearing browser data removes them.
+- New **My spots**, **Access**, and **Get there** filters distinguish locally reported information from OpenStreetMap tags. Only explicitly tagged transport access is treated as known; unspecified access is unverified.
+- Each visible spot gets its own astronomical sunrise/sunset time from a **batched Open-Meteo coordinate request**, with an **arrive 30 minutes early** suggestion. Results are cached; times depend on the spot's reported coordinates and do not guarantee a clear horizon.
+- Default sorting is nearest first, not a made-up community ranking. Prior scenic estimates remain clearly labeled as estimates. Personal stars are **not** public community averages.
+
+> **Important beta limitation:** The app has **no shared user database yet**. Added spots and ratings are visible only on the device where they were saved; they are **not published or submitted to SunSet's servers**, and there is no login, photo upload, verified access status, or public rating average. Avoid promising visitors features that require the next backend phase.
+
+### Next phase — secure shared community
+
+Use a dedicated SunSet backend, separate from unrelated projects (e.g. AutoType). Before enabling public contributions:
+
+1. Enable authentication or abuse-resistant, moderated submission controls.
+2. Store spots with owner, **public viewing coordinates**, category, known access modes, scenery description, opening-hour notes, and pending/approved/rejected moderation state.
+3. Store each member's 1–5 star review separately (one active rating per member/spot); compute displayed averages from **approved reviews**, with a review count. Ratings from personal devices cannot be aggregated without consent and user accounts.
+4. Moderate photos and reports, guard against private-property and unsafe location submissions, and allow corrections/takedowns.
+5. Apply row-level security so submitted pending spots remain private, only approved spots/reviews appear publicly, and only authorized users can edit their own submissions.
+6. Confirm access using user reports, map tags, and authoritative parks/trails information. Label uncertainty and never imply an unknown location is publicly accessible.
+7. Optimize shared caching and map searches using a server-side index so first-time searches do not depend on slow public Overpass responses.
+
+No backend project was created or billed as part of this release.
