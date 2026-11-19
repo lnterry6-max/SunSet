@@ -191,7 +191,7 @@
     const params = new URLSearchParams({api:'1',destination:`${spot.lat},${spot.lon}`});
     const dir = `https://www.google.com/maps/dir/?${params}`;
     return `<article class="spot-card" id="card-${escapeHTML(spot.id)}">
-      <div class="spot-photo"><img src="${PHOTO[spot.category]}" loading="lazy" alt="Illustrative ${LABELS[spot.category].toLowerCase()} landscape, not a photo of this specific spot"/><span class="photo-caption">Illustrative photo</span></div>
+      <div class="spot-photo" style="background-image:linear-gradient(0deg,rgba(28,32,45,.20),transparent 52%),url('${PHOTO[spot.category]}')" role="img" aria-label="Illustrative ${LABELS[spot.category].toLowerCase()} landscape, not a photo of this specific spot"><span class="photo-caption">Illustrative photo</span></div>
       <div class="spot-body"><div class="spot-head"><div><div class="category-kicker">${escapeHTML(LABELS[spot.category])}</div><h3 class="spot-title">${escapeHTML(spot.name)}</h3></div><div class="spot-distance">${spot.distance < .1 ? '< 0.1' : spot.distance.toFixed(1)} mi</div></div>
       <p class="spot-description">${DESCRIPTIONS[spot.category]}</p>
       <div class="spot-bottom"><div class="spot-score"><span class="score-number"><span class="stars" aria-hidden="true">★</span> ${score.toFixed(1)} / 5</span><span class="score-label">Estimated view score</span></div>
