@@ -86,3 +86,18 @@ Use a dedicated SunSet backend, separate from unrelated projects (e.g. AutoType)
 7. Optimize shared caching and map searches using a server-side index so first-time searches do not depend on slow public Overpass responses.
 
 No backend project was created or billed as part of this release.
+
+## Version 4: Resilient scenic search
+
+The previous version could show an empty page when browser-to-Overpass requests timed out. This release adds a dedicated Vercel function at `/api/spots` that:
+
+- Builds bounded geographic Overpass queries server-side, accepting only validated latitude, longitude, and mile radius (1–50).
+- Uses an actively maintained public Overpass provider, with a secondary provider on failures.
+- Adds shared CDN caching for successful geographic searches (12 hours plus stale-while-revalidate) and normalizes browser requests into reusable radius and coordinate buckets.
+- Uses the browser's direct Overpass call only if the backend is unavailable (including static hosting without server functions).
+- Keeps existing browser-cached results and user-entered spots visible during map service problems.
+- Displays a visible **Retry scenic search** button with a clear explanatory warning rather than leaving an unhelpful empty result list.
+
+**Worcester proof-of-concept:** Three source-checked local landmarks—Salisbury Park/Bancroft Tower, Green Hill Park, and Regatta Point—are shown as **viewing candidates** immediately while live discovery loads or if it fails. They are real named places, **not** surveyed exact sunrise/sunset viewing positions or publicly rated spots. Public access, operating hours, and horizon orientation must be checked on site. Salisbury Park has special posted hours and a permit requirement for entering Bancroft Tower. These starter candidates are deliberately limited to the Worcester area; other cities remain dependent on live mapped results or personal spots. Do not advertise this as a global curated database.
+
+Production note: Public Overpass instances remain best-effort infrastructure and are not a guaranteed service-level data backend. At scale, move discovery to an indexed, licensed data provider or a dedicated geographic database with refresh jobs. The Vercel function caches successful results through the CDN but is not a permanent database.
