@@ -56,3 +56,5 @@
 #map.picking-spot{cursor:crosshair}
 @media(max-width:800px){.contribute-banner{flex-direction:column;align-items:stretch}.filter-controls{gap:10px}.filter-controls .sort-label{flex-wrap:wrap}.spot-card{min-height:232px}}
 @media(max-width:530px){.contribute-banner{padding:18px}.spot-dialog{padding:18px}.dialog-grid{grid-template-columns:1fr}.form-actions{align-items:stretch;flex-direction:column}.spot-card{grid-template-columns:95px minmax(0,1fr)}.spot-visit .visit-pill{font-size:9px}.spot-solar{font-size:10px}.spot-score{gap:2px}.spot-actions{justify-content:start;gap:5px}.map-pick-hint{width:calc(100% - 22px)}}
+
+.status-retry{display:inline-flex;align-items:center;margin-top:12px;padding:10px 14px;border:1px solid #cb8062;color:#ad6249;background:#fff;border-radius:9px;font-size:12px;font-weight:800}.status-retry:hover{background:#fff0e9}.status-retry[hidden]{display:none!important}
