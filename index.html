@@ -30,6 +30,7 @@
         <div class="nav-links">
           <a href="#discover">Explore spots</a>
           <a href="#how-it-works">How it works</a>
+          <a href="#contribute">Add a spot</a>
         </div>
         <a class="nav-cta" href="#discover">Explore now <span aria-hidden="true">↗</span></a>
       </nav>
@@ -63,7 +64,7 @@
           </div>
           <button class="search-button" type="submit" id="search-button"><span class="search-button-icon">↗</span><span>Find my spots</span></button>
         </div>
-        <div class="search-bottom"><button type="button" class="nearby-button" id="nearby-button"><span aria-hidden="true">⌾</span> Use my current location</button><span>Real places · Real distances · Golden hour times</span></div>
+        <div class="search-bottom"><button type="button" class="nearby-button" id="nearby-button"><span aria-hidden="true">⌾</span> Use my current location</button><span>Mapped places · Local viewing tips · Actual sun times</span></div>
       </form>
       <div class="hero-footer"><span>YOUR FRONT-ROW SEAT TO THE SKY</span><span class="scroll-hint">SCROLL TO EXPLORE <span aria-hidden="true">↓</span></span></div>
     </div>
@@ -77,6 +78,11 @@
         <div class="solar-chip" id="solar-chip" aria-live="polite"><span class="solar-icon">◐</span><span id="solar-time-text">Sunset times will appear here</span></div>
       </div>
 
+      <div class="contribute-banner" id="contribute">
+        <div><div class="banner-eyebrow">KNOW A BETTER VIEW?</div><h3>Put your favorite spot on the map.</h3><p>Mark the actual viewing point, describe how to get there, and note whether it's open to the public. For now, your additions stay on this device while community publishing is being built.</p></div>
+        <button type="button" class="add-spot-cta" id="add-spot-button">＋ Add my spot</button>
+      </div>
+
       <div class="filters" aria-label="Filter scenic spots">
         <div class="filter-chips" id="category-filters">
           <button class="filter-chip active" data-category="all" aria-pressed="true">All views</button>
@@ -88,13 +94,16 @@
         </div>
         <div class="filter-controls">
           <button class="saved-filter" id="saved-filter" aria-pressed="false"><span aria-hidden="true">♡</span> Saved</button>
-          <label class="sort-label" for="sort-select">Sort by <select id="sort-select" name="sort"><option value="best">Best views</option><option value="nearest">Nearest</option><option value="name">Name A–Z</option><option value="rating">My ratings</option></select></label>
+          <button class="saved-filter" id="my-spots-filter" aria-pressed="false">✦ My spots</button>
+          <label class="sort-label" for="access-select">Access <select id="access-select"><option value="all">Any / unknown</option><option value="public">Publicly accessible</option><option value="limited">Limited hours</option><option value="view-only">View from public area</option><option value="unknown">Unverified</option></select></label>
+          <label class="sort-label" for="travel-select">Get there <select id="travel-select"><option value="all">Any method</option><option value="walk">On foot</option><option value="drive">By car</option><option value="bike">By bike</option><option value="boat">By boat</option></select></label>
+          <label class="sort-label" for="sort-select">Sort by <select id="sort-select" name="sort"><option value="nearest" selected>Nearest</option><option value="best">Scenic estimate</option><option value="name">Name A–Z</option><option value="rating">My ratings</option></select></label>
         </div>
       </div>
 
       <div class="results-layout">
         <div class="results-column">
-          <div class="results-meta"><span id="results-count">Explore your nearby horizon</span><span class="rating-caption"><span aria-hidden="true">✦</span> Stars are scenic estimates, not community averages</span></div>
+          <div class="results-meta"><span id="results-count">Explore your nearby horizon</span><span class="rating-caption"><span aria-hidden="true">✦</span> No shared reviews yet · Stars marked “estimated” aren’t public ratings</span></div>
           <div class="status" id="status" role="status" aria-live="polite"><span class="status-spinner" aria-hidden="true"></span><div><strong>Finding your golden hour…</strong><p>Looking up the city and nearby scenic places.</p></div></div>
           <div class="spot-list" id="spot-list"></div>
           <button type="button" class="show-more" id="show-more" hidden>See more places <span aria-hidden="true">↓</span></button>
@@ -108,11 +117,28 @@
           <div class="tip-card"><span class="tip-icon">✦</span><div><strong>A little golden-hour tip</strong><p>Arrive 20–30 minutes early. The colors before and after the sun crosses the horizon are often just as beautiful.</p></div></div>
         </aside>
       </div>
-      <p class="data-note" id="data-note">Places come from OpenStreetMap. Scenic scores estimate a place’s potential, not its exact horizon or safety. Always check access, operating hours, weather, and terrain before visiting.</p>
+      <p class="data-note" id="data-note">Places come from OpenStreetMap and your personal suggestions. Scenic estimates are not verified reviews. An unknown access label does not mean permission to enter. Times are astronomical predictions, not a guarantee of visibility. Check property boundaries, opening hours, weather, and terrain before visiting.</p>
     </section>
 
+    <dialog id="spot-dialog" class="spot-dialog" aria-labelledby="spot-dialog-title">
+      <div class="dialog-title-row"><div><span class="banner-eyebrow">SHARE THE VIEW</span><h2 id="spot-dialog-title">Add your golden-hour spot</h2></div><button type="button" class="dialog-close" id="close-spot-dialog" aria-label="Close">×</button></div>
+      <p class="dialog-intro">Place the pin where a visitor can <strong>legally stand to watch</strong>—not on private property. Your submission and rating are saved only in this browser for now.</p>
+      <form id="spot-form" class="spot-form">
+        <label>Spot name <input name="spotName" required maxlength="80" minlength="3" placeholder="e.g. My favorite lake overlook"></label>
+        <div class="dialog-grid"><label>Scenery <select name="category" required><option value="water">Waterfront</option><option value="mountains">Mountains</option><option value="coast">Coast</option><option value="lookouts">Lookout</option><option value="parks">Park</option></select></label><label>Best for <select name="bestFor"><option value="both">Sunrise & sunset</option><option value="sunrise">Sunrise</option><option value="sunset">Sunset</option><option value="unknown">Not sure yet</option></select></label></div>
+        <div class="dialog-grid"><label>Viewing latitude <input id="spot-lat" name="lat" type="number" step="any" min="-90" max="90" required placeholder="42.2626"></label><label>Viewing longitude <input id="spot-lon" name="lon" type="number" step="any" min="-180" max="180" required placeholder="-71.8023"></label></div>
+        <div class="pin-buttons"><button type="button" class="pin-helper" id="use-search-center">Use town center</button><button type="button" class="pin-helper" id="pick-map">Choose viewing point on map</button></div>
+        <label>Public access <select name="access" required><option value="unknown">Not verified / I'm not sure</option><option value="public">Public viewing area</option><option value="limited">Public, but hours/permissions may apply</option><option value="view-only">View only from a public road or path</option></select></label>
+        <fieldset class="travel-fieldset"><legend>Ways to reach the viewing point (select only what you know)</legend><div class="travel-options"><label><input type="checkbox" name="travel" value="walk"> Walk</label><label><input type="checkbox" name="travel" value="drive"> Car</label><label><input type="checkbox" name="travel" value="bike"> Bike</label><label><input type="checkbox" name="travel" value="boat"> Boat</label></div></fieldset>
+        <label>Visiting tips / public access notes <textarea name="notes" rows="3" maxlength="350" placeholder="Where to park, which direction to face, whether a gate closes, where to safely watch from…"></textarea></label>
+        <label>My view rating <select name="rating"><option value="0">Not rated yet</option><option value="1">★☆☆☆☆ · 1 star</option><option value="2">★★☆☆☆ · 2 stars</option><option value="3">★★★☆☆ · 3 stars</option><option value="4">★★★★☆ · 4 stars</option><option value="5">★★★★★ · 5 stars</option></select></label>
+        <div class="form-actions"><p id="spot-form-message" role="status" aria-live="polite">Community-wide sharing requires a database; this saves a personal draft.</p><button type="submit" class="add-spot-cta">Save my spot</button></div>
+      </form>
+    </dialog>
+    <div id="map-pick-hint" class="map-pick-hint" hidden><span>Tap the map to set the <strong>public viewing location</strong>.</span><button id="cancel-map-pick" type="button">Cancel</button></div>
+
     <section class="how-section" id="how-it-works">
-      <div class="page-width how-content"><div class="how-intro"><span class="section-overline">SUNRISE TO SUNSET, MADE SIMPLE</span><h2>The best moments<br />are <em>worth finding.</em></h2><p>A few thoughtful filters and real geographic data make the outdoors a little more accessible.</p></div><div class="steps"><div class="step"><span>01</span><div><h3>Pick your place</h3><p>Search a city or use your location, then choose how far you’re willing to travel.</p></div></div><div class="step"><span>02</span><div><h3>Find your kind of view</h3><p>Filter waterfronts, mountain peaks, scenic lookouts, coastlines, and parks.</p></div></div><div class="step"><span>03</span><div><h3>Go for the glow</h3><p>Compare scenic estimates, check the day’s solar time, save favorites, and get directions.</p></div></div></div></div>
+      <div class="page-width how-content"><div class="how-intro"><span class="section-overline">SUNRISE TO SUNSET, MADE SIMPLE</span><h2>The best moments<br />are <em>worth finding.</em></h2><p>A few thoughtful filters and real geographic data make the outdoors a little more accessible.</p></div><div class="steps"><div class="step"><span>01</span><div><h3>Pick your place</h3><p>Search a city or use your location, then choose how far you’re willing to travel. Add places you know are worth visiting.</p></div></div><div class="step"><span>02</span><div><h3>Find your kind of view</h3><p>Filter waterfronts, mountain peaks, lookouts, and parks. Find spots by foot, car, bike, or boat when access is known.</p></div></div><div class="step"><span>03</span><div><h3>Go for the glow</h3><p>Check the actual solar time at each viewing point, confirm access, and arrive 20–30 minutes early.</p></div></div></div></div>
     </section>
   </main>
 
