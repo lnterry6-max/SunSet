@@ -7,7 +7,10 @@
     form: $('#search-form'), location: $('#location-input'), radius: $('#radius-input'), radiusValue: $('#radius-value'),
     searchButton: $('#search-button'), nearby: $('#nearby-button'), status: $('#status'), list: $('#spot-list'),
     count: $('#results-count'), subtitle: $('#results-subtitle'), solarChip: $('#solar-chip'), solarText: $('#solar-time-text'),
-    categories: $('#category-filters'), more: $('#show-more'), saved: $('#saved-filter'), sort: $('#sort-select')
+    categories: $('#category-filters'), more: $('#show-more'), saved: $('#saved-filter'), sort: $('#sort-select'),
+    mySpotsFilter:$('#my-spots-filter'), accessFilter:$('#access-select'), travelFilter:$('#travel-select'),
+    addSpot:$('#add-spot-button'), spotDialog:$('#spot-dialog'), spotForm:$('#spot-form'), spotMessage:$('#spot-form-message'),
+    spotLat:$('#spot-lat'), spotLon:$('#spot-lon'), pickMap:$('#pick-map'), pickHint:$('#map-pick-hint')
   };
 
   const US_STATES = {
@@ -41,11 +44,13 @@
   };
   const LABELS = {water:'Waterfront',mountains:'Mountain views',coast:'Coastal view',lookouts:'Scenic lookout',parks:'Park & nature'};
   const state = {
-    mode: 'sunset', radius: 15, category: 'all', sort: 'best', savedOnly: false, limit: PER_PAGE,
+    mode: 'sunset', radius: 15, category: 'all', sort: 'nearest', savedOnly: false, mySpotsOnly:false, accessFilter:'all', travelFilter:'all', limit: PER_PAGE,
     place: null, spots: [], request: null, map: null, markerLayer: null, radiusCircle: null, locationPin: null,
     lastQuery: '', placeIsGps: false, ratings: readStore('sunset-ratings', {}), favorites: readStore('sunset-favorites', []),
     spotCache: readStore('sunset-spots-v2', {}), geoCache: readStore('sunset-geocodes-v2', {}),
-    solarCache: readStore('sunset-solar-v2', {}), solar: null
+    solarCache: readStore('sunset-solar-v2', {}), solar: null,
+    mySpots: readStore('sunset-my-spots-v3', []), spotSolar: readStore('sunset-spot-solar-v3', {}),
+    solarPending: new Set(), solarFailed:new Map(), pickCoordinates:false
   };
 
   function readStore(key, fallback) { try { const value = JSON.parse(localStorage.getItem(key)); return value ?? fallback; } catch { return fallback; } }
@@ -93,7 +98,7 @@
       if (distance > radius + .03) continue;
       const cleanName = tags.name.trim();
       const dedupeKey = cleanName.toLowerCase().replace(/[^a-z0-9]/g,'');
-      const spot = {...coords, category, tags, name:cleanName, distance,
+      const spot = {...coords, category, tags, name:cleanName, distance, source:'osm',
         id:`${el.type}-${el.id}`, osmType:el.type,osmId:el.id};
       const old = unique.get(dedupeKey);
       if (!old || getViewScore(spot,state.mode) > getViewScore(old,state.mode) || (getViewScore(spot,state.mode)===getViewScore(old,state.mode) && spot.distance < old.distance)) unique.set(dedupeKey,spot);
@@ -198,7 +203,9 @@
         const spots = parseSpots(data.elements,place,radius);
         // Persist compact data only, so repeat searches and smaller radius searches are immediate.
         const compact = spots.map(s=>({...s,tags:{ele:s.tags.ele,description:s.tags.description,direction:s.tags.direction,
-          'viewpoint:direction':s.tags['viewpoint:direction']}}));
+          'viewpoint:direction':s.tags['viewpoint:direction'],
+          access:s.tags.access,foot:s.tags.foot,bicycle:s.tags.bicycle,motor_vehicle:s.tags.motor_vehicle,boat:s.tags.boat,
+          opening_hours:s.tags.opening_hours}}));
         cacheWrite('spotCache',`${locationKey(place)}:${radius}`,compact,12);
         return compact;
       } catch (error) {
@@ -238,36 +245,148 @@
     els.searchButton.disabled = isSearching;
     els.searchButton.querySelector('span:last-child').textContent = isSearching ? 'Finding spots…' : 'Find my spots';
   }
+  function localSpotsForArea() {
+    if (!state.place || !Array.isArray(state.mySpots)) return [];
+    return state.mySpots.filter(spot=>spot && Number.isFinite(spot.lat) && Number.isFinite(spot.lon))
+      .map(spot=>({...spot,source:'personal',tags:{},distance:distanceMiles(state.place.latitude,state.place.longitude,spot.lat,spot.lon)}))
+      .filter(spot=>spot.distance <= state.radius + .03);
+  }
+  function accessFor(spot) {
+    if (spot.source === 'personal') return ['public','limited','view-only'].includes(spot.access) ? spot.access : 'unknown';
+    if (['yes','public'].includes(spot.tags?.access)) return 'public';
+    if (['permissive','customers'].includes(spot.tags?.access)) return 'limited';
+    return 'unknown';
+  }
+  function travelFor(spot) {
+    if(spot.source === 'personal') return Array.isArray(spot.travel) ? spot.travel.filter(m=>['walk','drive','bike','boat'].includes(m)) : [];
+    const yes = v => ['yes','designated','permissive'].includes(v);
+    const modes = [];
+    if (yes(spot.tags?.foot)) modes.push('walk');
+    if (yes(spot.tags?.motor_vehicle)) modes.push('drive');
+    if (yes(spot.tags?.bicycle)) modes.push('bike');
+    if (yes(spot.tags?.boat)) modes.push('boat');
+    return modes;
+  }
+  function sortScore(spot) {
+    const rating=Number(state.ratings[spot.id] || 0);
+    return rating || (spot.source === 'personal' ? 0 : getViewScore(spot,state.mode));
+  }
   function visibleSpots() {
-    const items = state.spots.filter(s => (state.category === 'all' || s.category === state.category) && (!state.savedOnly || state.favorites.includes(s.id)));
-    if (state.sort === 'nearest') items.sort((a,b)=>a.distance-b.distance);
-    else if (state.sort === 'name') items.sort((a,b)=>a.name.localeCompare(b.name));
-    else if (state.sort === 'rating') items.sort((a,b)=>(state.ratings[b.id]||0)-(state.ratings[a.id]||0) || getViewScore(b,state.mode)-getViewScore(a,state.mode));
-    else items.sort((a,b)=>getViewScore(b,state.mode)-getViewScore(a,state.mode) || a.distance-b.distance);
+    const merged = [...localSpotsForArea(), ...state.spots];
+    const unique = new Set();
+    const items = merged.filter(s => {
+      if(unique.has(s.id)) return false;
+      unique.add(s.id);
+      return (state.category==='all'||s.category===state.category)
+        && (!state.savedOnly||state.favorites.includes(s.id))
+        && (!state.mySpotsOnly||s.source==='personal')
+        && (state.accessFilter==='all'||accessFor(s)===state.accessFilter)
+        && (state.travelFilter==='all'||travelFor(s).includes(state.travelFilter));
+    });
+    if(state.sort==='nearest') items.sort((a,b)=>a.distance-b.distance);
+    else if(state.sort==='name') items.sort((a,b)=>a.name.localeCompare(b.name));
+    else if(state.sort==='rating') items.sort((a,b)=>(state.ratings[b.id]||0)-(state.ratings[a.id]||0) || a.distance-b.distance);
+    else items.sort((a,b)=>sortScore(b)-sortScore(a)||a.distance-b.distance);
     return items;
   }
+  const ACCESS_TEXT={public:'Reported public access · verify',limited:'Check hours / permission','view-only':'View from public area only',unknown:'Public access unverified'};
+  const METHOD_TEXT={walk:'On foot',drive:'By car',bike:'By bike',boat:'By boat'};
+  function solarKey(spot) {return `${Number(spot.lat).toFixed(5)},${Number(spot.lon).toFixed(5)}`;}
+  function isTodayInZone(info) {
+    if(!info?.day||!info?.timezone)return true;
+    try {
+      const parts=new Intl.DateTimeFormat('en-US',{timeZone:info.timezone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
+      const fields=Object.fromEntries(parts.map(part=>[part.type,part.value]));
+      return `${fields.year}-${fields.month}-${fields.day}`===info.day;
+    }catch{return true;}
+  }
+  function freshSolar(entry) {
+    return entry && Date.now()-entry.at < 10*60*60*1000 && isTodayInZone(entry.value);
+  }
+  function spotTime(spot) {
+    const info=state.spotSolar[solarKey(spot)];
+    if(freshSolar(info)) {
+      const time=info.value?.[state.mode];
+      const hhmm=time?.split('T')[1]?.slice(0,5);
+      const bits=hhmm?.split(':').map(Number);
+      if(bits?.length===2 && bits.every(Number.isFinite)) {
+        const arrive=(bits[0]*60+bits[1]-30+1440)%1440;
+        const arriveAt=`${Math.floor(arrive/60)%12||12}:${String(arrive%60).padStart(2,'0')} ${Math.floor(arrive/60)>=12?'PM':'AM'}`;
+        return `<strong>Today's ${state.mode}: ${formatLocalTime(time)}</strong> · Arrive by ${arriveAt} <small>(local time at this spot)</small>`;
+      }
+    }
+    if(state.solarFailed.has(solarKey(spot))) return `Exact ${state.mode} time unavailable · Allow 30 minutes before arrival`;
+    return `Checking today's ${state.mode} time for this exact location…`;
+  }
   function cardHTML(spot) {
-    const score = getViewScore(spot,state.mode), myRating = Number(state.ratings[spot.id] || 0);
-    const isSaved = state.favorites.includes(spot.id);
-    const params = new URLSearchParams({api:'1',destination:`${spot.lat},${spot.lon}`});
-    const dir = `https://www.google.com/maps/dir/?${params}`;
+    const personal=spot.source==='personal';
+    const myRating=Number(state.ratings[spot.id]||0);
+    const score=personal ? myRating : getViewScore(spot,state.mode);
+    const access=accessFor(spot),methods=travelFor(spot);
+    const isSaved=state.favorites.includes(spot.id);
+    const params=new URLSearchParams({api:'1',destination:`${spot.lat},${spot.lon}`});
+    const dir=`https://www.google.com/maps/dir/?${params}`;
+    const scoreHtml=personal
+      ? `<span class="score-number ${score?'personal-score':'unrated'}">${score?`★ ${score} / 5`:'Not rated yet'}</span><span class="score-label">Your personal view rating</span>`
+      : `<span class="score-number"><span class="stars">★</span> ${score.toFixed(1)} / 5</span><span class="score-label">Estimated scenic potential</span>`;
+    const eventText=personal ? ({both:'Sunrise & sunset',sunrise:'Best at sunrise',sunset:'Best at sunset',unknown:'Best time unverified'}[spot.bestFor]||'Best time unverified') : 'Sun direction not verified';
+    const visitLabel=methods.length ? methods.map(m=>METHOD_TEXT[m]).join(' · ') : 'Travel access unverified';
+    const details = personal && spot.notes ? `<p class="spot-notes">${escapeHTML(spot.notes)}</p>` : '';
     return `<article class="spot-card" id="card-${escapeHTML(spot.id)}">
       <div class="spot-photo"><img loading="lazy" decoding="async" src="${PHOTO[spot.category]}" alt="Illustrative ${LABELS[spot.category].toLowerCase()} landscape, not a photo of this specific spot"><span class="photo-caption">Illustrative photo</span></div>
-      <div class="spot-body"><div class="spot-head"><div><div class="category-kicker">${escapeHTML(LABELS[spot.category])}</div><h3 class="spot-title">${escapeHTML(spot.name)}</h3></div><div class="spot-distance">${spot.distance < .1 ? '< 0.1' : spot.distance.toFixed(1)} mi</div></div>
-      <p class="spot-description">${DESCRIPTIONS[spot.category]}</p>
-      <div class="spot-bottom"><div class="spot-score"><span class="score-number"><span class="stars" aria-hidden="true">★</span> ${score.toFixed(1)} / 5</span><span class="score-label">Estimated view score</span></div>
-      <div class="spot-actions"><button type="button" class="save-button ${isSaved?'saved':''}" data-save="${spot.id}" aria-label="${isSaved?'Remove from':'Add to'} saved spots: ${escapeHTML(spot.name)}" aria-pressed="${isSaved}">${isSaved?'♥':'♡'}</button><a href="${dir}" target="_blank" rel="noopener noreferrer" class="direction-link" aria-label="Directions to ${escapeHTML(spot.name)}">Directions ↗</a></div></div>
-      <div class="personal-rating"><span>Your view rating (on this device)</span><div class="rating-buttons" role="group" aria-label="Rate ${escapeHTML(spot.name)}">${[1,2,3,4,5].map(n=>`<button type="button" data-rate="${spot.id}" data-stars="${n}" class="${n<=myRating?'filled':''}" aria-label="Rate ${n} ${n===1?'star':'stars'}" aria-pressed="${n===myRating}">★</button>`).join('')}</div></div>
+      <div class="spot-body"><div class="spot-head"><div><div class="category-kicker">${escapeHTML(LABELS[spot.category])}${personal?' · MY SPOT':''}</div><h3 class="spot-title">${escapeHTML(spot.name)}</h3></div><div class="spot-distance">${spot.distance<.1?'&lt; 0.1':spot.distance.toFixed(1)} mi</div></div>
+      <div class="spot-visit"><span class="visit-pill access-${access}">${ACCESS_TEXT[access]}</span><span class="visit-pill">${escapeHTML(visitLabel)}</span><span class="visit-pill">${escapeHTML(eventText)}</span></div>
+      ${details||`<p class="spot-description">${DESCRIPTIONS[spot.category]}</p>`}
+      <div class="spot-solar" data-spot-solar="${escapeHTML(spot.id)}">${spotTime(spot)}</div>
+      <div class="spot-bottom"><div class="spot-score">${scoreHtml}</div>
+      <div class="spot-actions"><button type="button" class="save-button ${isSaved?'saved':''}" data-save="${escapeHTML(spot.id)}" aria-label="${isSaved?'Remove from':'Add to'} saved spots: ${escapeHTML(spot.name)}" aria-pressed="${isSaved}">${isSaved?'♥':'♡'}</button><a href="${dir}" target="_blank" rel="noopener noreferrer" class="direction-link" aria-label="Directions to ${escapeHTML(spot.name)}">Directions ↗</a>${personal?`<button class="remove-spot" type="button" data-remove-spot="${escapeHTML(spot.id)}" aria-label="Delete personal spot ${escapeHTML(spot.name)}">Delete</button>`:''}</div></div>
+      <div class="personal-rating"><span>Your view rating (on this device)</span><div class="rating-buttons" role="group" aria-label="Rate ${escapeHTML(spot.name)}">${[1,2,3,4,5].map(n=>`<button type="button" data-rate="${escapeHTML(spot.id)}" data-stars="${n}" class="${n<=myRating?'filled':''}" aria-label="Rate ${n} ${n===1?'star':'stars'}" aria-pressed="${n===myRating}">★</button>`).join('')}</div></div>
       </div></article>`;
   }
+  function syncSolarLabels() {
+    els.list.querySelectorAll('[data-spot-solar]').forEach(el=>{
+      const spot=[...state.spots,...localSpotsForArea()].find(s=>s.id===el.dataset.spotSolar);
+      if(spot)el.innerHTML=spotTime(spot);
+    });
+  }
+  function loadVisibleSpotTimes(spots) {
+    if(!spots.length) return;
+    const batch=spots.slice(0,state.limit).filter(s=>{
+      const key=solarKey(s),existing=state.spotSolar[key];
+      const failedAt=state.solarFailed.get(key);
+      if(failedAt && Date.now()-failedAt<60*1000)return false;
+      return !state.solarPending.has(key)&&!freshSolar(existing);
+    }).slice(0,12);
+    if(!batch.length) return;
+    batch.forEach(s=>state.solarPending.add(solarKey(s)));
+    const lat=batch.map(s=>Number(s.lat).toFixed(5)).join(','), lon=batch.map(s=>Number(s.lon).toFixed(5)).join(',');
+    const url=`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=sunrise,sunset&timezone=auto&forecast_days=1`;
+    requestJSON(url,{timeoutMs:6500}).then(data=>{
+      const items=Array.isArray(data)?data:[data];
+      batch.forEach((s,i)=>{
+        const entry=items[i];
+        if(entry?.daily?.sunrise?.[0] && entry?.daily?.sunset?.[0]) {
+          const value={day:entry.daily.time?.[0],sunrise:entry.daily.sunrise[0],sunset:entry.daily.sunset[0],timezone:entry.timezone};
+          state.spotSolar[solarKey(s)]={at:Date.now(),value};state.solarFailed.delete(solarKey(s));
+        } else state.solarFailed.set(solarKey(s),Date.now());
+      });
+      const keys=Object.keys(state.spotSolar).sort((a,b)=>state.spotSolar[b].at-state.spotSolar[a].at);
+      keys.slice(200).forEach(key=>delete state.spotSolar[key]);
+      store('sunset-spot-solar-v3',state.spotSolar);
+    }).catch(()=>batch.forEach(s=>state.solarFailed.set(solarKey(s),Date.now()))).finally(()=>{
+      batch.forEach(s=>state.solarPending.delete(solarKey(s)));
+      syncSolarLabels();
+    });
+  }
   function render() {
-    const spots = visibleSpots();
-    els.count.textContent = state.place ? `${spots.length} ${spots.length===1?'place':'places'} within ${state.radius} miles` : 'Explore your nearby horizon';
-    els.list.innerHTML = spots.slice(0,state.limit).map(cardHTML).join('');
-    els.more.hidden = spots.length <= state.limit;
-    if (state.place && !spots.length && els.status.hidden) showStatus('empty','No matching spots in this search','Try another scenery filter, switch off Saved, or increase your mile radius.');
-    if (spots.length && els.status.dataset.type === 'empty') els.status.hidden=true;
+    const spots=visibleSpots();
+    els.count.textContent=state.place ? `${spots.length} ${spots.length===1?'place':'places'} within ${state.radius} miles` : 'Explore your nearby horizon';
+    els.list.innerHTML=spots.slice(0,state.limit).map(cardHTML).join('');
+    els.more.hidden=spots.length<=state.limit;
+    if(state.place&&!spots.length&&els.status.hidden) showStatus('empty','No matching spots in this search','Try another scenery, access or travel filter, or expand your radius. You can also add a personal spot.');
+    if(spots.length && els.status.dataset.type==='empty')els.status.hidden=true;
     updateMap(spots);
+    loadVisibleSpotTimes(spots);
   }
   function createMap() {
     if (state.map || !window.L) return;
@@ -275,6 +394,17 @@
     root.innerHTML='';
     state.map = L.map(root,{scrollWheelZoom:false,zoomControl:false}).setView([39.8,-98.6],4);
     L.control.zoom({position:'bottomright'}).addTo(state.map);
+    state.map.on('click',event=>{
+      if(!state.pickCoordinates)return;
+      state.pickCoordinates=false;
+      $('#map').classList.remove('picking-spot');
+      els.pickHint.hidden=true;
+      els.spotLat.value=event.latlng.lat.toFixed(6);
+      els.spotLon.value=event.latlng.lng.toFixed(6);
+      if(typeof els.spotDialog.showModal==='function')els.spotDialog.showModal();
+      else els.spotDialog.setAttribute('open','');
+      els.spotMessage.textContent='Viewing pin selected. Confirm the spot can legally be viewed from these coordinates.';
+    });
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
       attribution:'&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap contributors</a>',maxZoom:18
     }).addTo(state.map);
@@ -297,7 +427,8 @@
     spots.slice(0,35).forEach((spot,i)=>{
       const marker=L.marker([spot.lat,spot.lon],{icon:L.divIcon({className:'',iconSize:[30,30],iconAnchor:[15,28],html:`<div class="map-marker"><span>${i+1}</span></div>`})});
       const mapsUrl=`https://www.google.com/maps/dir/?api=1&destination=${spot.lat}%2C${spot.lon}`;
-      marker.bindPopup(`<strong>${escapeHTML(spot.name)}</strong><p>${escapeHTML(LABELS[spot.category])} · ${spot.distance.toFixed(1)} mi · ${getViewScore(spot,state.mode).toFixed(1)} / 5 estimated</p><a href="${mapsUrl}" target="_blank" rel="noopener noreferrer">Get directions ↗</a>`);
+      const ratingText=spot.source==='personal'?'My saved spot':`${getViewScore(spot,state.mode).toFixed(1)} / 5 scenic estimate`;
+      marker.bindPopup(`<strong>${escapeHTML(spot.name)}</strong><p>${escapeHTML(LABELS[spot.category])} · ${spot.distance.toFixed(1)} mi · ${ratingText}</p><p>${escapeHTML(ACCESS_TEXT[accessFor(spot)])}</p><a href="${mapsUrl}" target="_blank" rel="noopener noreferrer">Get directions ↗</a>`);
       marker.addTo(state.markerLayer);
     });
     const bounds=state.radiusCircle.getBounds();
@@ -407,6 +538,16 @@
   els.sort.addEventListener('change',()=>{state.sort=els.sort.value;state.limit=PER_PAGE;if(state.place)render();});
   els.more.addEventListener('click',()=>{state.limit+=PER_PAGE;render();});
   els.list.addEventListener('click',e=>{
+    const remove=e.target.closest('[data-remove-spot]');
+    if(remove){
+      const id=remove.dataset.removeSpot;
+      if(!window.confirm('Delete this saved personal spot from this device?'))return;
+      state.mySpots=state.mySpots.filter(spot=>spot.id!==id);
+      store('sunset-my-spots-v3',state.mySpots);
+      state.favorites=state.favorites.filter(key=>key!==id);store('sunset-favorites',state.favorites);
+      delete state.ratings[id];store('sunset-ratings',state.ratings);
+      render();return;
+    }
     const save=e.target.closest('[data-save]');
     if(save){const id=save.dataset.save;state.favorites=state.favorites.includes(id)?state.favorites.filter(v=>v!==id):[...state.favorites,id];store('sunset-favorites',state.favorites);render();return;}
     const rate=e.target.closest('[data-rate]');
@@ -419,6 +560,88 @@
       els.location.value='Current location';
       search({latitude:coords.latitude,longitude:coords.longitude,displayName:'your current location'});
     },()=>showStatus('error','Couldn’t access your location','Allow location access in your browser or search by city instead.'),{enableHighAccuracy:false,timeout:10000,maximumAge:300000});
+  });
+  // Local personal contributions. Shared community publishing requires dedicated backend + review.
+  function openSpotDialog() {
+    if(state.place && !els.spotLat.value && !els.spotLon.value) {
+      els.spotLat.value=Number(state.place.latitude).toFixed(6);
+      els.spotLon.value=Number(state.place.longitude).toFixed(6);
+    }
+    if(typeof els.spotDialog.showModal==='function')els.spotDialog.showModal();
+    else els.spotDialog.setAttribute('open','');
+  }
+  function closeSpotDialog() {
+    if(typeof els.spotDialog.close==='function')els.spotDialog.close();
+    else els.spotDialog.removeAttribute('open');
+  }
+  els.addSpot.addEventListener('click',openSpotDialog);
+  $('#close-spot-dialog').addEventListener('click',closeSpotDialog);
+  els.spotDialog.addEventListener('click',e=>{if(e.target===els.spotDialog)closeSpotDialog();});
+  $('#use-search-center').addEventListener('click',()=>{
+    if(!state.place){els.spotMessage.textContent='Search for a city first.';return;}
+    els.spotLat.value=Number(state.place.latitude).toFixed(6);
+    els.spotLon.value=Number(state.place.longitude).toFixed(6);
+    els.spotMessage.textContent='Town center selected. Move the coordinates to the exact public viewing spot if needed.';
+  });
+  els.pickMap.addEventListener('click',()=>{
+    if(!state.place){els.spotMessage.textContent='Search for a city before picking a spot on the map.';return;}
+    if(!window.L||!state.map){els.spotMessage.textContent='The map is unavailable. Enter the viewing coordinates instead.';return;}
+    closeSpotDialog();state.pickCoordinates=true;els.pickHint.hidden=false;
+    $('#map').classList.add('picking-spot');
+    $('#map').scrollIntoView({behavior:'smooth',block:'center'});
+    state.map.invalidateSize();
+  });
+  $('#cancel-map-pick').addEventListener('click',()=>{
+    state.pickCoordinates=false;els.pickHint.hidden=true;$('#map').classList.remove('picking-spot');openSpotDialog();
+  });
+  els.spotForm.addEventListener('submit',e=>{
+    e.preventDefault();
+    const fd=new FormData(els.spotForm);
+    const name=String(fd.get('spotName')||'').trim().slice(0,80);
+    const lat=Number(fd.get('lat')),lon=Number(fd.get('lon'));
+    if(name.length<3||!Number.isFinite(lat)||!Number.isFinite(lon)||Math.abs(lat)>90||Math.abs(lon)>180){
+      els.spotMessage.textContent='Please provide a name and valid viewing coordinates.';return;
+    }
+    const access=String(fd.get('access')||'unknown');
+    const bestFor=String(fd.get('bestFor')||'unknown');
+    const category=String(fd.get('category')||'parks');
+    const rating=Math.max(0,Math.min(5,Number(fd.get('rating'))||0));
+    const notes=String(fd.get('notes')||'').trim().slice(0,350);
+    const travel=fd.getAll('travel').filter(m=>['walk','drive','bike','boat'].includes(m));
+    const id=`my-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`;
+    const newSpot={id,name,lat,lon,source:'personal',category:LABELS[category]?category:'parks',
+      access:['public','limited','view-only','unknown'].includes(access)?access:'unknown',
+      bestFor:['both','sunset','sunrise','unknown'].includes(bestFor)?bestFor:'unknown',travel,notes,createdAt:Date.now()};
+    if(!Array.isArray(state.mySpots))state.mySpots=[];
+    state.mySpots=[newSpot,...state.mySpots].slice(0,100);
+    store('sunset-my-spots-v3',state.mySpots);
+    if(rating) {state.ratings[id]=rating;store('sunset-ratings',state.ratings);}
+    closeSpotDialog();els.spotForm.reset();
+    els.spotLat.value='';els.spotLon.value='';
+    els.spotMessage.textContent='Personal draft only. Community publishing is not active yet.';
+    state.savedOnly=false;state.mySpotsOnly=false;els.saved.setAttribute('aria-pressed','false');els.mySpotsFilter.setAttribute('aria-pressed','false');
+    state.accessFilter='all';state.travelFilter='all';els.accessFilter.value='all';els.travelFilter.value='all';
+    state.category='all';els.categories.querySelectorAll('[data-category]').forEach(b=>{let active=b.dataset.category==='all';b.classList.toggle('active',active);b.setAttribute('aria-pressed',String(active));});
+    render();
+    if(state.place && distanceMiles(state.place.latitude,state.place.longitude,lat,lon)>state.radius){
+      showStatus('empty','Spot saved on this device','It is outside your current search radius. Increase the radius or search nearer the spot to see it.');
+    }else if(state.place){
+      els.subtitle.textContent='Your personal spot was saved. It stays in this browser until community publishing is available.';
+      $('#discover').scrollIntoView({behavior:'smooth',block:'start'});
+    }
+  });
+  els.mySpotsFilter.addEventListener('click',()=>{
+    state.mySpotsOnly=!state.mySpotsOnly;state.limit=PER_PAGE;
+    els.mySpotsFilter.setAttribute('aria-pressed',String(state.mySpotsOnly));
+    if(state.place){els.status.hidden=true;render();}
+  });
+  els.accessFilter.addEventListener('change',()=>{
+    state.accessFilter=els.accessFilter.value;state.limit=PER_PAGE;
+    if(state.place){els.status.hidden=true;render();}
+  });
+  els.travelFilter.addEventListener('change',()=>{
+    state.travelFilter=els.travelFilter.value;state.limit=PER_PAGE;
+    if(state.place){els.status.hidden=true;render();}
   });
   // Run the initial city search so the home page immediately demonstrates real geographic results.
   search();
